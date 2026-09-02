@@ -26,6 +26,17 @@ app.use(cors({
 app.use(express.json());
 app.use(morgan('dev'));
 
+// Middleware to guarantee DB initialization before request handling
+app.use(async (req, res, next) => {
+  try {
+    await initDB();
+    next();
+  } catch (err) {
+    console.error('DB initialization error:', err);
+    res.status(500).json({ message: 'Database initialization failed.' });
+  }
+});
+
 // API Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/customers', customerRoutes);
@@ -54,20 +65,20 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Initialize database and start server
-async function startServer() {
-  try {
-    await initDB();
-    app.listen(PORT, () => {
-      console.log(`\n======================================================`);
-      console.log(`💈 Luxe Salon API Server running on port ${PORT}`);
-      console.log(`🚀 API Base URL: http://localhost:${PORT}/api`);
-      console.log(`======================================================\n`);
-    });
-  } catch (error) {
-    console.error('Failed to start server:', error);
-    process.exit(1);
-  }
+// Standalone start for local development
+if (process.env.NODE_ENV !== 'production' || process.env.VERCEL !== '1') {
+  initDB().then(() => {
+    if (!process.env.VERCEL) {
+      app.listen(PORT, () => {
+        console.log(`\n======================================================`);
+        console.log(`💈 Luxe Salon API Server running on port ${PORT}`);
+        console.log(`🚀 API Base URL: http://localhost:${PORT}/api`);
+        console.log(`======================================================\n`);
+      });
+    }
+  }).catch(err => {
+    console.error('Failed to start server:', err);
+  });
 }
 
-startServer();
+export default app;
