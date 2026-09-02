@@ -33,7 +33,7 @@ app.use(async (req, res, next) => {
     next();
   } catch (err) {
     console.error('DB initialization error:', err);
-    res.status(500).json({ message: 'Database initialization failed.' });
+    res.status(500).json({ message: 'Database initialization failed: ' + (err.message || 'Unknown error') });
   }
 });
 
@@ -65,17 +65,22 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Standalone start for local development
-if (process.env.NODE_ENV !== 'production' || process.env.VERCEL !== '1') {
+// Standalone start for local development (only when executed directly)
+const isDirectRun = process.argv[1] && (
+  process.argv[1].endsWith('server\\src\\index.js') || 
+  process.argv[1].endsWith('server/src/index.js') || 
+  process.argv[1].endsWith('src\\index.js') || 
+  process.argv[1].endsWith('src/index.js')
+);
+
+if (isDirectRun && !process.env.VERCEL) {
   initDB().then(() => {
-    if (!process.env.VERCEL) {
-      app.listen(PORT, () => {
-        console.log(`\n======================================================`);
-        console.log(`💈 Luxe Salon API Server running on port ${PORT}`);
-        console.log(`🚀 API Base URL: http://localhost:${PORT}/api`);
-        console.log(`======================================================\n`);
-      });
-    }
+    app.listen(PORT, () => {
+      console.log(`\n======================================================`);
+      console.log(`💈 Luxe Salon API Server running on port ${PORT}`);
+      console.log(`🚀 API Base URL: http://localhost:${PORT}/api`);
+      console.log(`======================================================\n`);
+    });
   }).catch(err => {
     console.error('Failed to start server:', err);
   });

@@ -2,8 +2,10 @@ import initSqlJs from 'sql.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
 import bcrypt from 'bcryptjs';
 
+const require = createRequire(import.meta.url);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -13,6 +15,7 @@ const TMP_DB_PATH = '/tmp/salon.db';
 
 let db = null;
 let SQL = null;
+let initPromise = null;
 
 // Ensure data directory exists if possible
 try {
@@ -25,45 +28,73 @@ try {
 
 export async function initDB() {
   if (db) return db;
+  if (initPromise) return initPromise;
 
-  SQL = await initSqlJs();
-
-  // Try loading from /tmp first (persisted during container lifetime), then DB_PATH
-  if (fs.existsSync(TMP_DB_PATH)) {
+  initPromise = (async () => {
     try {
-      const filebuffer = fs.readFileSync(TMP_DB_PATH);
-      db = new SQL.Database(filebuffer);
-      console.log('📦 Loaded existing SQLite database from /tmp.');
-    } catch (e) {
-      // Fallback
+      // Find wasm file buffer
+      let wasmBinary = null;
+      try {
+        const wasmPath = require.resolve('sql.js/dist/sql-wasm.wasm');
+        if (fs.existsSync(wasmPath)) {
+          wasmBinary = fs.readFileSync(wasmPath);
+        }
+      } catch (e) {
+        console.warn('WASM path resolution warning:', e.message);
+      }
+
+      if (wasmBinary) {
+        SQL = await initSqlJs({ wasmBinary });
+      } else {
+        SQL = await initSqlJs({
+          locateFile: (file) => path.join(__dirname, '../../node_modules/sql.js/dist', file)
+        });
+      }
+
+      // Try loading existing DB
+      if (fs.existsSync(TMP_DB_PATH)) {
+        try {
+          const filebuffer = fs.readFileSync(TMP_DB_PATH);
+          db = new SQL.Database(filebuffer);
+          console.log('📦 Loaded existing SQLite database from /tmp.');
+        } catch (e) {
+          console.warn('Could not read from /tmp/salon.db:', e.message);
+        }
+      } else if (fs.existsSync(DB_PATH)) {
+        try {
+          const filebuffer = fs.readFileSync(DB_PATH);
+          db = new SQL.Database(filebuffer);
+          console.log('📦 Loaded existing SQLite database from data/salon.db.');
+        } catch (e) {
+          console.warn('Could not read from data/salon.db:', e.message);
+        }
+      }
+
+      if (!db) {
+        db = new SQL.Database();
+        console.log('✨ Initialized new SQLite database in memory.');
+      }
+
+      // Enable foreign keys
+      db.run('PRAGMA foreign_keys = ON;');
+
+      // Create tables
+      createSchema();
+      // Seed sample data if empty
+      await seedInitialData();
+
+      // Save to disk if writable
+      saveDB();
+
+      return db;
+    } catch (err) {
+      console.error('CRITICAL: initDB failed:', err);
+      initPromise = null;
+      throw err;
     }
-  } else if (fs.existsSync(DB_PATH)) {
-    try {
-      const filebuffer = fs.readFileSync(DB_PATH);
-      db = new SQL.Database(filebuffer);
-      console.log('📦 Loaded existing SQLite database from data/salon.db.');
-    } catch (e) {
-      // Fallback
-    }
-  }
+  })();
 
-  if (!db) {
-    db = new SQL.Database();
-    console.log('✨ Initialized new SQLite database in memory.');
-  }
-
-  // Enable foreign keys
-  db.run('PRAGMA foreign_keys = ON;');
-
-  // Create tables
-  createSchema();
-  // Seed sample data if empty
-  await seedInitialData();
-
-  // Save to disk if writable
-  saveDB();
-
-  return db;
+  return initPromise;
 }
 
 export function saveDB() {
