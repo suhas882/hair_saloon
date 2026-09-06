@@ -39,8 +39,8 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
     }
   }
 
-  // Check approval status gating if required (e.g. direct access to book appointment)
-  if (requireApproved && user.role === 'customer' && user.approval_status !== 'approved') {
+  // Check approval status gating only if explicitly suspended/rejected
+  if (requireApproved && user.role === 'customer' && (user.approval_status === 'rejected' || user.approval_status === 'suspended')) {
     return (
       <div className="max-w-4xl mx-auto px-4 py-16 text-center">
         <div className="p-8 rounded-3xl bg-[#141C2E] border border-amber-500/30 shadow-2xl max-w-lg mx-auto">
@@ -48,16 +48,13 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
             <ShieldAlert className="w-8 h-8" />
           </div>
           <h2 className="text-2xl font-serif font-bold text-slate-100 mb-2">
-            Account Approval Required
+            Account Status Notice
           </h2>
           <p className="text-sm text-slate-300 mb-6 leading-relaxed">
-            {user.approval_status === 'pending'
-              ? 'Your account is currently waiting for administrator approval. Once approved, you will be able to book appointments across our 4 luxury styling chairs.'
-              : user.approval_status === 'rejected'
+            {user.approval_status === 'rejected'
               ? 'Your account registration was not approved by salon management. Please contact our reception for details.'
               : 'Your booking privileges have been suspended. Please contact front desk.'}
           </p>
-          <Navigate to="/customer/dashboard" replace />
         </div>
       </div>
     );

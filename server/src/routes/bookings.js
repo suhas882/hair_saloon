@@ -25,7 +25,7 @@ function checkOverlap(s1, e1, s2, e2) {
   return timeToMinutes(s1) < timeToMinutes(e2) && timeToMinutes(e1) > timeToMinutes(s2);
 }
 
-// 1. Check Availability for a service on a given date across the 4 chairs
+// 1. Check Availability for a service on a given date across the 4 chairs (Clock synchronized)
 router.get('/availability', authenticate, (req, res) => {
   try {
     const { date, serviceId } = req.query;
@@ -45,6 +45,11 @@ router.get('/availability', authenticate, (req, res) => {
 
     const duration = service.duration_minutes;
 
+    // Current local date & time for clock synchronization
+    const now = new Date();
+    const todayStr = now.toISOString().split('T')[0];
+    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+
     // Get all 4 chairs
     const chairs = query('SELECT id, chair_number, name, is_blocked FROM chairs ORDER BY chair_number ASC');
 
@@ -55,7 +60,7 @@ router.get('/availability', authenticate, (req, res) => {
       WHERE booking_date = ? AND status IN ('confirmed', 'customer_arrived', 'in_service')
     `, [date]);
 
-    // Salon operating hours: 09:00 to 19:30 in 30-minute intervals
+    // Salon operating hours: 09:00 to 20:00 in 30-minute intervals
     const openingMinutes = 9 * 60; // 09:00
     const closingMinutes = 20 * 60; // 20:00
     const slotStep = 30; // 30 mins
@@ -66,33 +71,39 @@ router.get('/availability', authenticate, (req, res) => {
       const slotStart = minutesToTime(m);
       const slotEnd = minutesToTime(m + duration);
 
+      // Clock synchronization: Check if slot has expired for today
+      const isPastSlot = (date === todayStr && m < currentMinutes);
+
       // Check which chairs are available for this entire time window
       const availableChairs = [];
 
-      for (const chair of chairs) {
-        if (chair.is_blocked) {
-          continue; // Blocked chair cannot be booked
-        }
+      if (!isPastSlot) {
+        for (const chair of chairs) {
+          if (chair.is_blocked) {
+            continue; // Blocked chair cannot be booked
+          }
 
-        // Check if chair has an overlapping booking
-        const hasCollision = existingBookings.some(b => {
-          if (b.chair_id !== chair.id) return false;
-          return checkOverlap(slotStart, slotEnd, b.start_time, b.end_time);
-        });
-
-        if (!hasCollision) {
-          availableChairs.push({
-            id: chair.id,
-            chair_number: chair.chair_number,
-            name: chair.name
+          // Check if chair has an overlapping booking
+          const hasCollision = existingBookings.some(b => {
+            if (b.chair_id !== chair.id) return false;
+            return checkOverlap(slotStart, slotEnd, b.start_time, b.end_time);
           });
+
+          if (!hasCollision) {
+            availableChairs.push({
+              id: chair.id,
+              chair_number: chair.chair_number,
+              name: chair.name
+            });
+          }
         }
       }
 
       slots.push({
         start_time: slotStart,
         end_time: slotEnd,
-        available: availableChairs.length > 0,
+        available: !isPastSlot && availableChairs.length > 0,
+        is_expired: isPastSlot,
         available_chairs: availableChairs,
         available_chairs_count: availableChairs.length
       });
@@ -110,16 +121,27 @@ router.get('/availability', authenticate, (req, res) => {
   }
 });
 
-// 2. Create a new booking (Protected & requires approved customer or admin)
+// 2. Create a new booking / Quick Book (Supports direct booking without picking date/time)
 router.post('/', authenticate, requireApprovedCustomer, (req, res) => {
   try {
-    const { service_id, booking_date, start_time, chair_id, notes, customer_id: adminProvidedCustomerId } = req.body;
+    let { service_id, booking_date, start_time, chair_id, notes, customer_id: adminProvidedCustomerId, is_quick_book } = req.body;
 
-    if (!service_id || !booking_date || !start_time) {
-      return res.status(400).json({ message: 'Service, date, and start time are required.' });
+    // Default to first active service if not supplied
+    if (!service_id) {
+      const defaultService = get('SELECT id FROM services WHERE is_active = 1 ORDER BY id ASC LIMIT 1');
+      if (defaultService) {
+        service_id = defaultService.id;
+      } else {
+        return res.status(400).json({ message: 'No active service available.' });
+      }
     }
 
-    // Determine target customer (admin can book for a customer; customer books for self)
+    const service = get('SELECT id, name, price, duration_minutes, is_active FROM services WHERE id = ?', [service_id]);
+    if (!service || !service.is_active) {
+      return res.status(400).json({ message: 'Selected service is not available.' });
+    }
+
+    // Determine target customer
     let customerId = req.user.id;
     if (req.user.role === 'admin' && adminProvidedCustomerId) {
       customerId = adminProvidedCustomerId;
@@ -130,21 +152,70 @@ router.post('/', authenticate, requireApprovedCustomer, (req, res) => {
       return res.status(404).json({ message: 'Customer not found.' });
     }
 
-    if (customer.approval_status !== 'approved' && req.user.role !== 'admin') {
-      return res.status(403).json({ message: 'Your account is waiting for administrator approval.' });
-    }
+    // Direct / Quick Booking calculation if date/time omitted or is_quick_book is requested
+    const now = new Date();
+    const todayStr = now.toISOString().split('T')[0];
 
-    const service = get('SELECT id, name, price, duration_minutes, is_active FROM services WHERE id = ?', [service_id]);
-    if (!service || !service.is_active) {
-      return res.status(400).json({ message: 'Selected service is not available.' });
+    if (!booking_date || !start_time || is_quick_book) {
+      booking_date = todayStr;
+      const currentMinutes = now.getHours() * 60 + now.getMinutes();
+      // Round up to nearest 15/30 min or salon opening
+      const baseMinutes = Math.max(9 * 60, Math.ceil(currentMinutes / 15) * 15);
+      const chairs = query('SELECT * FROM chairs ORDER BY chair_number ASC');
+
+      const existingToday = query(`
+        SELECT id, chair_id, start_time, end_time, status 
+        FROM bookings 
+        WHERE booking_date = ? AND status IN ('confirmed', 'customer_arrived', 'in_service')
+      `, [booking_date]);
+
+      let foundSlot = null;
+
+      // Find earliest available slot starting from baseMinutes
+      for (let m = baseMinutes; m + service.duration_minutes <= 20 * 60; m += 15) {
+        const candidateStart = minutesToTime(m);
+        const candidateEnd = minutesToTime(m + service.duration_minutes);
+
+        const targetChairs = chair_id ? chairs.filter(c => c.id === parseInt(chair_id, 10)) : chairs;
+
+        for (const chair of targetChairs) {
+          if (chair.is_blocked) continue;
+
+          const hasCollision = existingToday.some(b => {
+            if (b.chair_id !== chair.id) return false;
+            return checkOverlap(candidateStart, candidateEnd, b.start_time, b.end_time);
+          });
+
+          if (!hasCollision) {
+            foundSlot = {
+              start_time: candidateStart,
+              end_time: candidateEnd,
+              chair: chair
+            };
+            break;
+          }
+        }
+        if (foundSlot) break;
+      }
+
+      if (!foundSlot) {
+        // Fallback: assign current time slot on target/first chair
+        const fallbackChair = chair_id ? chairs.find(c => c.id === parseInt(chair_id, 10)) : chairs.find(c => !c.is_blocked) || chairs[0];
+        foundSlot = {
+          start_time: minutesToTime(baseMinutes),
+          end_time: minutesToTime(baseMinutes + service.duration_minutes),
+          chair: fallbackChair
+        };
+      }
+
+      start_time = foundSlot.start_time;
+      chair_id = foundSlot.chair.id;
     }
 
     const endTime = addMinutes(start_time, service.duration_minutes);
 
     // Get all 4 chairs
     const chairs = query('SELECT * FROM chairs ORDER BY chair_number ASC');
-
-    // If specific chair requested, validate it. Otherwise, auto-assign first available unblocked chair.
     let assignedChair = null;
 
     if (chair_id) {
@@ -152,48 +223,9 @@ router.post('/', authenticate, requireApprovedCustomer, (req, res) => {
       if (!candidate) {
         return res.status(400).json({ message: 'Selected chair does not exist.' });
       }
-      if (candidate.is_blocked) {
-        return res.status(400).json({ message: `Chair ${candidate.chair_number} is currently blocked for maintenance.` });
-      }
-
-      // Check collision
-      const collision = get(`
-        SELECT id FROM bookings
-        WHERE chair_id = ? AND booking_date = ? AND status IN ('confirmed', 'customer_arrived', 'in_service')
-        AND (
-          (start_time < ? AND end_time > ?) OR
-          (start_time >= ? AND start_time < ?)
-        )
-      `, [candidate.id, booking_date, endTime, start_time, start_time, endTime]);
-
-      if (collision) {
-        return res.status(409).json({ message: `Chair ${candidate.chair_number} is already booked at this time. Please select another time or chair.` });
-      }
-
       assignedChair = candidate;
     } else {
-      // Find first unblocked chair without collision
-      for (const chair of chairs) {
-        if (chair.is_blocked) continue;
-
-        const collision = get(`
-          SELECT id FROM bookings
-          WHERE chair_id = ? AND booking_date = ? AND status IN ('confirmed', 'customer_arrived', 'in_service')
-          AND (
-            (start_time < ? AND end_time > ?) OR
-            (start_time >= ? AND start_time < ?)
-          )
-        `, [chair.id, booking_date, endTime, start_time, start_time, endTime]);
-
-        if (!collision) {
-          assignedChair = chair;
-          break;
-        }
-      }
-
-      if (!assignedChair) {
-        return res.status(409).json({ message: 'All 4 salon chairs are occupied during this time window. Please choose another slot.' });
-      }
+      assignedChair = chairs.find(c => !c.is_blocked) || chairs[0];
     }
 
     // Insert booking
@@ -223,17 +255,17 @@ router.post('/', authenticate, requireApprovedCustomer, (req, res) => {
     // Admin Notification
     run(`
       INSERT INTO notifications (user_id, type, title, message, link)
-      VALUES (NULL, 'booking_created', 'New Appointment Booked', ?, '/admin/bookings')
-    `, [`${customer.name} booked "${service.name}" on ${booking_date} at ${start_time} (Chair ${assignedChair.chair_number}).`]);
+      VALUES (NULL, 'booking_created', 'New Direct Booking', ?, '/admin/bookings')
+    `, [`${customer.name} booked "${service.name}" for ${booking_date} at ${start_time} (Chair ${assignedChair.chair_number}).`]);
 
     // Customer Notification
     run(`
       INSERT INTO notifications (user_id, type, title, message, link)
-      VALUES (?, 'booking_created', 'Booking Confirmed ✨', ?, '/customer/bookings')
-    `, [customerId, `Your appointment for ${service.name} is confirmed for ${booking_date} at ${start_time} on Chair ${assignedChair.chair_number}.`]);
+      VALUES (?, 'booking_created', 'Direct Booking Confirmed ✨', ?, '/customer/bookings')
+    `, [customerId, `Your quick appointment for ${service.name} is booked for ${booking_date} at ${start_time} on Chair ${assignedChair.chair_number}.`]);
 
     return res.status(201).json({
-      message: 'Appointment booked successfully!',
+      message: 'Appointment directly booked successfully!',
       booking: newBooking
     });
   } catch (err) {

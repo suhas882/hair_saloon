@@ -4,16 +4,24 @@ import { authenticate, requireAdmin } from '../middleware/auth.js';
 
 const router = Router();
 
+function timeToMinutes(timeStr) {
+  if (!timeStr) return 0;
+  const [h, m] = timeStr.split(':').map(Number);
+  return h * 60 + m;
+}
+
 // Admin Dashboard Summary
 router.get('/admin', authenticate, requireAdmin, (req, res) => {
   try {
-    const today = new Date().toISOString().split('T')[0];
+    const now = new Date();
+    const today = now.toISOString().split('T')[0];
+    const nowMinutes = now.getHours() * 60 + now.getMinutes();
 
     // Chairs overview
     const chairs = query('SELECT * FROM chairs ORDER BY chair_number ASC');
 
     const chairCards = chairs.map(chair => {
-      const activeBooking = get(`
+      let activeBooking = get(`
         SELECT 
           b.id as booking_id, b.booking_date, b.start_time, b.end_time, b.status as booking_status, b.notes,
           u.name as customer_name, u.phone as customer_phone,
@@ -22,26 +30,81 @@ router.get('/admin', authenticate, requireAdmin, (req, res) => {
         JOIN users u ON b.customer_id = u.id
         JOIN services s ON b.service_id = s.id
         WHERE b.chair_id = ? AND b.booking_date = ? AND b.status IN ('confirmed', 'customer_arrived', 'in_service')
-        ORDER BY b.start_time ASC
+        ORDER BY 
+          CASE 
+            WHEN b.status = 'in_service' THEN 1 
+            WHEN b.status = 'customer_arrived' THEN 2 
+            ELSE 3 
+          END, 
+          b.start_time ASC
         LIMIT 1
       `, [chair.id, today]);
 
       let effectiveStatus = chair.status;
+      let freeInMinutes = 0;
+      let timeoutMinutesLeft = null;
+
       if (chair.is_blocked) {
         effectiveStatus = 'blocked';
+        const match = chair.block_reason?.match(/Blocked for (\d+) mins/i);
+        if (match) {
+          freeInMinutes = parseInt(match[1], 10);
+        } else {
+          freeInMinutes = 30;
+        }
       } else if (activeBooking) {
-        if (activeBooking.booking_status === 'in_service' || activeBooking.booking_status === 'customer_arrived') {
-          effectiveStatus = 'occupied';
-        } else if (activeBooking.booking_status === 'confirmed') {
-          effectiveStatus = 'booked';
+        const startMins = timeToMinutes(activeBooking.start_time);
+        const endMins = timeToMinutes(activeBooking.end_time);
+
+        // 10-Minute Auto-Release rule for confirmed arrival
+        if (activeBooking.booking_status === 'confirmed') {
+          const elapsed = nowMinutes - startMins;
+
+          if (nowMinutes >= startMins) {
+            if (elapsed >= 10) {
+              // Auto-release
+              query(`UPDATE bookings SET status = 'no_show', no_show_resolution = 'released', updated_at = CURRENT_TIMESTAMP WHERE id = ${activeBooking.booking_id}`);
+              query(`UPDATE chairs SET status = 'available', is_blocked = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ${chair.id}`);
+              effectiveStatus = 'available';
+              activeBooking = null;
+              freeInMinutes = 0;
+            } else {
+              timeoutMinutesLeft = Math.max(0, 10 - elapsed);
+              effectiveStatus = 'booked';
+              freeInMinutes = Math.max(1, endMins - nowMinutes);
+            }
+          } else {
+            effectiveStatus = 'booked';
+            freeInMinutes = Math.max(1, endMins - nowMinutes);
+          }
+        }
+
+        if (activeBooking) {
+          if (activeBooking.booking_status === 'in_service' || activeBooking.booking_status === 'customer_arrived') {
+            effectiveStatus = 'occupied';
+            freeInMinutes = Math.max(1, endMins - nowMinutes);
+          } else if (activeBooking.booking_status === 'confirmed') {
+            effectiveStatus = 'booked';
+            freeInMinutes = Math.max(1, endMins - nowMinutes);
+          }
         }
       } else if (chair.status !== 'no_show' && chair.status !== 'blocked') {
         effectiveStatus = 'available';
+        freeInMinutes = 0;
+      }
+
+      // Sync effectiveStatus with database if needed
+      if (!chair.is_blocked && chair.status !== effectiveStatus) {
+        try {
+          query(`UPDATE chairs SET status = '${effectiveStatus}', updated_at = CURRENT_TIMESTAMP WHERE id = ${chair.id}`);
+        } catch (e) {}
       }
 
       return {
         ...chair,
         status: effectiveStatus,
+        free_in_minutes: freeInMinutes,
+        timeout_minutes_left: timeoutMinutesLeft,
         current_booking: activeBooking || null
       };
     });

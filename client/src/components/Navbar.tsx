@@ -138,7 +138,7 @@ export const Navbar: React.FC = () => {
                   }`}
                 >
                   <LayoutDashboard className="w-4 h-4" />
-                  <span>Command Center</span>
+                  <span>Saloon Dashboard</span>
                 </Link>
                 <Link
                   to="/admin/chairs"
@@ -414,7 +414,7 @@ export const Navbar: React.FC = () => {
                   onClick={() => setMobileMenuOpen(false)}
                   className="block px-3 py-2 rounded-lg text-slate-300 hover:bg-slate-800"
                 >
-                  Dashboard & 4 Chairs
+                  Saloon Dashboard
                 </Link>
                 <Link
                   to="/admin/chairs"

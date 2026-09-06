@@ -145,8 +145,8 @@ export const Services: React.FC = () => {
                     to={user ? `/customer/book?serviceId=${service.id}` : '/register'}
                     className="px-5 py-2.5 rounded-xl gold-btn text-xs font-bold flex items-center gap-1.5 shadow-md"
                   >
-                    <Calendar className="w-3.5 h-3.5" />
-                    <span>Book Now</span>
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>Quick Book</span>
                   </Link>
                 </div>
               </div>

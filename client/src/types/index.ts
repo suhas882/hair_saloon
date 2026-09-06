@@ -49,6 +49,8 @@ export interface Chair {
     notes?: string;
   } | null;
   today_bookings_count?: number;
+  free_in_minutes?: number;
+  timeout_minutes_left?: number | null;
 }
 
 export type BookingStatus = 

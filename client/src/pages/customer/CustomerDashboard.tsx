@@ -38,9 +38,10 @@ export const CustomerDashboard: React.FC = () => {
   useEffect(() => {
     const fetchDashboard = async () => {
       try {
-        await refreshUser(); // Ensure latest approval status is synced
         const res = await api.get('/dashboard/customer');
-        setData(res.data);
+        if (res.data) {
+          setData(res.data);
+        }
       } catch (err) {
         console.error('Failed to load customer dashboard:', err);
       } finally {
@@ -48,7 +49,7 @@ export const CustomerDashboard: React.FC = () => {
       }
     };
     fetchDashboard();
-  }, [refreshUser]);
+  }, []);
 
   const isApproved = user?.approval_status === 'approved';
   const isPending = user?.approval_status === 'pending';

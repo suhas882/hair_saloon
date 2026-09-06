@@ -30,16 +30,16 @@ router.post('/register', async (req, res) => {
 
     const newUser = get('SELECT id, name, email, phone, role, approval_status, created_at FROM users WHERE id = ?', [result.lastInsertRowid]);
 
-    // Send admin notification
+    // Send owner notification for approval request
     run(`
       INSERT INTO notifications (user_id, type, title, message, link)
-      VALUES (NULL, 'customer_registered', 'New Customer Registration', ?, '/admin/customers')
-    `, [`${newUser.name} (${newUser.email}) just registered and is awaiting approval.`]);
+      VALUES (NULL, 'customer_registered', 'New Customer Approval Request', ?, '/admin/customers')
+    `, [`${newUser.name} (${newUser.email}) registered and requested approval from owner.`]);
 
     const token = generateToken(newUser);
 
     return res.status(201).json({
-      message: 'Registration successful! Your account is currently pending administrator approval.',
+      message: 'Registration successful! Your request for approval has been submitted to the owner.',
       user: newUser,
       token,
     });

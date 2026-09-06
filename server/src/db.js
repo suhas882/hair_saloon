@@ -82,6 +82,8 @@ export async function initDB() {
       createSchema();
       // Seed sample data if empty
       await seedInitialData();
+      // Ensure default service 1 is Hair Cut & Shave
+      db.run("UPDATE services SET name = 'Hair Cut & Shave', category = 'Haircut & Grooming', price = 499 WHERE id = 1");
 
       // Save to disk if writable
       saveDB();
@@ -162,7 +164,7 @@ function createSchema() {
       phone TEXT,
       password_hash TEXT NOT NULL,
       role TEXT NOT NULL CHECK(role IN ('admin', 'customer')) DEFAULT 'customer',
-      approval_status TEXT NOT NULL CHECK(approval_status IN ('pending', 'approved', 'rejected', 'suspended')) DEFAULT 'pending',
+      approval_status TEXT NOT NULL CHECK(approval_status IN ('pending', 'approved', 'rejected', 'suspended')) DEFAULT 'approved',
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
@@ -286,32 +288,32 @@ async function seedInitialData() {
   run(`
     INSERT INTO users (name, email, phone, password_hash, role, approval_status)
     VALUES (?, ?, ?, ?, ?, ?)
-  `, ['Ananya Roy', 'ananya@example.com', '+1 (555) 321-6547', custPass, 'customer', 'pending']);
+  `, ['Ananya Roy', 'ananya@example.com', '+1 (555) 321-6547', custPass, 'customer', 'approved']);
 
   run(`
     INSERT INTO users (name, email, phone, password_hash, role, approval_status)
     VALUES (?, ?, ?, ?, ?, ?)
-  `, ['Dev Mehta', 'dev@example.com', '+1 (555) 654-9870', custPass, 'customer', 'rejected']);
+  `, ['Dev Mehta', 'dev@example.com', '+1 (555) 654-9870', custPass, 'customer', 'approved']);
 
   // 2. Seed 4 Chairs
   run(`
     INSERT INTO chairs (chair_number, name, status, is_blocked, block_reason)
     VALUES 
-    (1, 'Chair 1 - Master Styling Bay', 'booked', 0, NULL),
+    (1, 'Chair 1 - Master Styling Bay', 'available', 0, NULL),
     (2, 'Chair 2 - Precision Cut Station', 'available', 0, NULL),
-    (3, 'Chair 3 - Color & Spa Suite', 'occupied', 0, NULL),
+    (3, 'Chair 3 - Color & Spa Suite', 'available', 0, NULL),
     (4, 'Chair 4 - VIP Lounge Station', 'available', 0, NULL)
   `);
 
   // 3. Seed Services (Prices in INR ₹)
   const services = [
     {
-      name: 'Signature Executive Haircut & Styling',
-      description: 'Precision haircut customized to face shape, accompanied by scalp massage, hot towel treatment, and luxury pomade styling.',
+      name: 'Hair Cut & Shave',
+      description: 'Our signature grooming combo: precision scissor & clipper haircut with royal hot towel straight razor shave.',
       price: 499.00,
-      duration_minutes: 45,
-      category: 'Haircut',
-      image_url: 'https://images.unsplash.com/photo-1599351431202-1e0f0137899a?auto=format&fit=crop&w=600&q=80',
+      duration_minutes: 30,
+      category: 'Haircut & Grooming',
+      image_url: 'https://images.unsplash.com/photo-1503951914875-452162b0f3f1?auto=format&fit=crop&w=600&q=80',
       is_active: 1
     },
     {
